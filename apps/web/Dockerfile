@@ -11,6 +11,7 @@ COPY package.json ./
 RUN pnpm install --no-frozen-lockfile
 
 COPY . .
+RUN mkdir -p public
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm build
 
