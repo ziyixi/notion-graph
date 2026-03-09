@@ -671,6 +671,13 @@ a {
   min-width: min(440px, 100%);
 }
 
+.admin-page-sync label.admin-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
 .admin-page-sync input {
   background: #ffffff;
   border: 1px solid var(--line-strong);
@@ -678,6 +685,12 @@ a {
   padding: 0.52rem 0.66rem;
   font: inherit;
   color: var(--ink);
+}
+
+.admin-page-sync input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
 }
 
 .admin-error {

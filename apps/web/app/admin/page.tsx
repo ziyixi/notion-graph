@@ -4,19 +4,29 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
 import {
+  fetchAdminConfig,
   enqueueAdminFullSync,
   enqueueAdminPageSync,
   fetchAdminMetrics,
   fetchAdminSyncStatus,
-  fetchAdminSyncTasks
+  fetchAdminSyncTasks,
+  updateAdminConfig
 } from "../../lib/api";
-import { AdminSyncStatusResponse, SyncTaskItem } from "../../lib/types";
+import { AdminConfigResponse, AdminSyncStatusResponse, SyncTaskItem } from "../../lib/types";
 
 const AUTO_REFRESH_MS = 10_000;
 
 export default function AdminPage() {
   const [apiKey, setApiKey] = useState("");
   const [pageId, setPageId] = useState("");
+  const [config, setConfig] = useState<AdminConfigResponse | null>(null);
+  const [rootPageIdInput, setRootPageIdInput] = useState("");
+  const [notionTokenInput, setNotionTokenInput] = useState("");
+  const [clearStoredToken, setClearStoredToken] = useState(false);
+  const [useFixturesInput, setUseFixturesInput] = useState(false);
+  const [fixturePathInput, setFixturePathInput] = useState("");
+  const [isConfigInitialized, setIsConfigInitialized] = useState(false);
+  const [isSavingConfig, setIsSavingConfig] = useState(false);
   const [status, setStatus] = useState<AdminSyncStatusResponse | null>(null);
   const [tasks, setTasks] = useState<SyncTaskItem[]>([]);
   const [metrics, setMetrics] = useState("");
@@ -34,11 +44,13 @@ export default function AdminPage() {
     setIsRefreshing(true);
     setError(null);
     try {
-      const [nextStatus, nextTasks, nextMetrics] = await Promise.all([
+      const [nextConfig, nextStatus, nextTasks, nextMetrics] = await Promise.all([
+        fetchAdminConfig(apiKey),
         fetchAdminSyncStatus(apiKey),
         fetchAdminSyncTasks(apiKey, 80),
         fetchAdminMetrics(apiKey)
       ]);
+      setConfig(nextConfig);
       setStatus(nextStatus);
       setTasks(nextTasks);
       setMetrics(nextMetrics);
@@ -50,7 +62,27 @@ export default function AdminPage() {
   }, [apiKey, hasApiKey]);
 
   useEffect(() => {
+    if (!config || isConfigInitialized) {
+      return;
+    }
+    setRootPageIdInput(config.notionRootPageId);
+    setUseFixturesInput(config.notionUseFixtures);
+    setFixturePathInput(config.notionFixturePath);
+    setNotionTokenInput("");
+    setClearStoredToken(false);
+    setIsConfigInitialized(true);
+  }, [config, isConfigInitialized]);
+
+  useEffect(() => {
+    setIsConfigInitialized(false);
+  }, [apiKey]);
+
+  useEffect(() => {
     if (!hasApiKey) {
+      setConfig(null);
+      setStatus(null);
+      setTasks([]);
+      setMetrics("");
       return;
     }
 
@@ -92,12 +124,42 @@ export default function AdminPage() {
     }
   };
 
+  const onSaveConfig = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!hasApiKey) {
+      return;
+    }
+
+    setIsSavingConfig(true);
+    setError(null);
+    try {
+      const updated = await updateAdminConfig(apiKey, {
+        notionRootPageId: rootPageIdInput,
+        notionToken: notionTokenInput.trim() ? notionTokenInput.trim() : undefined,
+        notionUseFixtures: useFixturesInput,
+        notionFixturePath: fixturePathInput,
+        clearNotionToken: clearStoredToken
+      });
+      setConfig(updated);
+      setRootPageIdInput(updated.notionRootPageId);
+      setUseFixturesInput(updated.notionUseFixtures);
+      setFixturePathInput(updated.notionFixturePath);
+      setNotionTokenInput("");
+      setClearStoredToken(false);
+      await refreshAll();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save runtime config");
+    } finally {
+      setIsSavingConfig(false);
+    }
+  };
+
   return (
     <main className="app-shell admin-shell">
       <header className="top-bar">
         <div className="brand-block">
           <p className="eyebrow">Admin Control Plane</p>
-          <h1>Sync & Observability</h1>
+          <h1>Runtime Config, Sync & Observability</h1>
           <p className="top-subline">
             Trigger sync jobs, inspect queue/task state, and view live backend metrics.
           </p>
@@ -128,6 +190,72 @@ export default function AdminPage() {
         >
           {isTriggeringFull ? "Queueing..." : "Queue Full Reconcile"}
         </button>
+      </section>
+
+      <section className="admin-page-sync">
+        <form onSubmit={onSaveConfig}>
+          <label>
+            Root Page ID
+            <input
+              type="text"
+              placeholder="Notion root page id"
+              value={rootPageIdInput}
+              onChange={(event) => setRootPageIdInput(event.target.value)}
+              disabled={!hasApiKey}
+            />
+          </label>
+          <label>
+            Notion Token (leave blank to keep existing)
+            <input
+              type="password"
+              placeholder="secret_xxx"
+              value={notionTokenInput}
+              onChange={(event) => setNotionTokenInput(event.target.value)}
+              disabled={!hasApiKey}
+            />
+          </label>
+          <label>
+            Fixture Path
+            <input
+              type="text"
+              placeholder="/app/tests/fixtures/notion_fixture.json"
+              value={fixturePathInput}
+              onChange={(event) => setFixturePathInput(event.target.value)}
+              disabled={!hasApiKey}
+            />
+          </label>
+          <label className="admin-checkbox">
+            <input
+              type="checkbox"
+              checked={useFixturesInput}
+              onChange={(event) => setUseFixturesInput(event.target.checked)}
+              disabled={!hasApiKey}
+            />
+            Use Fixture Notion Client
+          </label>
+          <label className="admin-checkbox">
+            <input
+              type="checkbox"
+              checked={clearStoredToken}
+              onChange={(event) => setClearStoredToken(event.target.checked)}
+              disabled={!hasApiKey}
+            />
+            Clear Stored Notion Token
+          </label>
+          <button
+            type="submit"
+            className="control-button"
+            disabled={!hasApiKey || isSavingConfig}
+          >
+            {isSavingConfig ? "Saving..." : "Save Runtime Config"}
+          </button>
+        </form>
+        {config ? (
+          <p className="panel-caption">
+            Token configured: {config.hasNotionToken ? "yes" : "no"} | Source:{" "}
+            {config.configuredViaDb ? "database" : "env fallback"}
+          </p>
+        ) : null}
       </section>
 
       <section className="admin-page-sync">

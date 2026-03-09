@@ -11,6 +11,8 @@ from app.db.models import SyncCheckpoint, SyncTask
 from app.db.session import SessionLocal, get_session
 from app.notion.webhook import extract_page_ids_from_webhook, verify_webhook_signature
 from app.schemas.api import (
+    AdminConfigResponse,
+    AdminConfigUpdateRequest,
     AdminEnqueueResponse,
     AdminSyncStatusResponse,
     GraphResponse,
@@ -21,6 +23,7 @@ from app.schemas.api import (
     WebhookIngestResponse,
 )
 from app.services.graph_query import GraphQueryService
+from app.services.runtime_config import RuntimeConfigService
 from app.services.sync import (
     TASK_TYPE_FULL_RECONCILE,
     TASK_TYPE_PAGE_RECONCILE,
@@ -29,6 +32,10 @@ from app.services.sync import (
 )
 
 router = APIRouter(prefix="/api")
+runtime_config_service = RuntimeConfigService()
+RUNTIME_CONFIG_MISSING_DETAIL = (
+    "Runtime Notion config is incomplete. Set token/root in /api/admin/config first."
+)
 
 
 def _split_types(raw: str | None) -> list[str] | None:
@@ -37,11 +44,11 @@ def _split_types(raw: str | None) -> list[str] | None:
     return [item.strip().lower() for item in raw.split(",") if item.strip()]
 
 
-def _validate_root(settings: Settings, root_page_id: str | None) -> None:
-    if root_page_id and root_page_id != settings.notion_root_page_id:
+def _validate_root(configured_root_page_id: str, root_page_id: str | None) -> None:
+    if root_page_id and root_page_id != configured_root_page_id:
         raise HTTPException(
             status_code=400,
-            detail="rootPageId must match configured NOTION_ROOT_PAGE_ID",
+            detail="rootPageId must match the configured runtime root page id",
         )
 
 
@@ -89,7 +96,13 @@ def get_graph(
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> GraphResponse:
-    _validate_root(settings, root_page_id)
+    runtime_config = runtime_config_service.get_effective_config(session, settings)
+    if not runtime_config.notion_root_page_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Graph root page is not configured yet. Set it in /admin first.",
+        )
+    _validate_root(runtime_config.notion_root_page_id, root_page_id)
 
     if mode == "neighborhood" and not center_node_id:
         raise HTTPException(
@@ -97,7 +110,7 @@ def get_graph(
             detail="centerNodeId is required for neighborhood mode",
         )
 
-    service = GraphQueryService(settings)
+    service = GraphQueryService(settings, root_page_id=runtime_config.notion_root_page_id)
     return service.get_graph(
         session=session,
         mode=mode,
@@ -117,8 +130,12 @@ def search_nodes(
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> SearchResponse:
-    _validate_root(settings, root_page_id)
-    service = GraphQueryService(settings)
+    runtime_config = runtime_config_service.get_effective_config(session, settings)
+    if not runtime_config.notion_root_page_id:
+        return SearchResponse(items=[], total=0, tookMs=0)
+
+    _validate_root(runtime_config.notion_root_page_id, root_page_id)
+    service = GraphQueryService(settings, root_page_id=runtime_config.notion_root_page_id)
     return service.search_nodes(session=session, query=q, limit=limit, types=_split_types(types))
 
 
@@ -128,7 +145,11 @@ def get_node_detail(
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> NodeDetailResponse:
-    service = GraphQueryService(settings)
+    runtime_config = runtime_config_service.get_effective_config(session, settings)
+    if not runtime_config.notion_root_page_id:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    service = GraphQueryService(settings, root_page_id=runtime_config.notion_root_page_id)
     payload = service.get_node_detail(session=session, node_id=node_id)
     if payload is None:
         raise HTTPException(status_code=404, detail="Node not found")
@@ -143,7 +164,14 @@ def get_neighborhood(
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> GraphResponse:
-    service = GraphQueryService(settings)
+    runtime_config = runtime_config_service.get_effective_config(session, settings)
+    if not runtime_config.notion_root_page_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Graph root page is not configured yet. Set it in /admin first.",
+        )
+
+    service = GraphQueryService(settings, root_page_id=runtime_config.notion_root_page_id)
     return service.get_graph(
         session=session,
         mode="neighborhood",
@@ -159,13 +187,69 @@ def get_health(
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> HealthResponse:
-    service = GraphQueryService(settings)
+    runtime_config = runtime_config_service.get_effective_config(session, settings)
+    if not runtime_config.notion_root_page_id:
+        return HealthResponse(
+            status="degraded",
+            rootPageId="",
+            lastFullSyncAt=None,
+            syncStatus="awaiting_config",
+        )
+
+    service = GraphQueryService(settings, root_page_id=runtime_config.notion_root_page_id)
     status, last_full_sync_at, sync_status = service.get_health(session=session)
     return HealthResponse(
         status="ok" if status in {"idle", "running"} else "degraded",
-        rootPageId=settings.notion_root_page_id,
+        rootPageId=runtime_config.notion_root_page_id,
         lastFullSyncAt=last_full_sync_at,
         syncStatus=sync_status,
+    )
+
+
+@router.get(
+    "/admin/config",
+    response_model=AdminConfigResponse,
+    dependencies=[Depends(_require_admin)],
+)
+def get_admin_config(
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> AdminConfigResponse:
+    config = runtime_config_service.get_admin_config(session, settings)
+    return AdminConfigResponse(
+        notionRootPageId=config.notion_root_page_id,
+        hasNotionToken=config.has_notion_token,
+        notionUseFixtures=config.notion_use_fixtures,
+        notionFixturePath=config.notion_fixture_path,
+        configuredViaDb=config.configured_via_db,
+    )
+
+
+@router.put(
+    "/admin/config",
+    response_model=AdminConfigResponse,
+    dependencies=[Depends(_require_admin)],
+)
+def update_admin_config(
+    payload: AdminConfigUpdateRequest,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> AdminConfigResponse:
+    runtime_config_service.update_admin_config(
+        session,
+        notion_token=payload.notionToken,
+        notion_root_page_id=payload.notionRootPageId,
+        notion_use_fixtures=payload.notionUseFixtures,
+        notion_fixture_path=payload.notionFixturePath,
+        clear_notion_token=payload.clearNotionToken,
+    )
+    config = runtime_config_service.get_admin_config(session, settings)
+    return AdminConfigResponse(
+        notionRootPageId=config.notion_root_page_id,
+        hasNotionToken=config.has_notion_token,
+        notionUseFixtures=config.notion_use_fixtures,
+        notionFixturePath=config.notion_fixture_path,
+        configuredViaDb=config.configured_via_db,
     )
 
 
@@ -178,7 +262,12 @@ def get_admin_sync_status(
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> AdminSyncStatusResponse:
-    checkpoint = session.get(SyncCheckpoint, settings.notion_root_page_id)
+    admin_config = runtime_config_service.get_admin_config(session, settings)
+    checkpoint = (
+        session.get(SyncCheckpoint, admin_config.notion_root_page_id)
+        if admin_config.notion_root_page_id
+        else None
+    )
     queue_counts = SyncMetricsService(
         session_factory=SessionLocal, settings=settings
     ).queue_counts()
@@ -187,7 +276,7 @@ def get_admin_sync_status(
     ).all()
 
     return AdminSyncStatusResponse(
-        rootPageId=settings.notion_root_page_id,
+        rootPageId=admin_config.notion_root_page_id,
         checkpointStatus=checkpoint.status if checkpoint else "starting",
         lastFullSyncAt=checkpoint.last_full_sync_at if checkpoint else None,
         lastError=checkpoint.last_error if checkpoint else None,
@@ -220,7 +309,14 @@ def get_admin_sync_tasks(
 def enqueue_full_sync(
     settings: Settings = Depends(get_settings),
 ) -> AdminEnqueueResponse:
-    SyncService(session_factory=SessionLocal, settings=settings).enqueue_full_sync(source="admin")
+    accepted = SyncService(session_factory=SessionLocal, settings=settings).enqueue_full_sync(
+        source="admin"
+    )
+    if not accepted:
+        raise HTTPException(
+            status_code=400,
+            detail=RUNTIME_CONFIG_MISSING_DETAIL,
+        )
     return AdminEnqueueResponse(accepted=True, taskType=TASK_TYPE_FULL_RECONCILE)
 
 
@@ -233,10 +329,15 @@ def enqueue_page_sync(
     page_id: str,
     settings: Settings = Depends(get_settings),
 ) -> AdminEnqueueResponse:
-    SyncService(session_factory=SessionLocal, settings=settings).enqueue_page_sync(
+    accepted = SyncService(session_factory=SessionLocal, settings=settings).enqueue_page_sync(
         page_id=page_id,
         source="admin",
     )
+    if not accepted:
+        raise HTTPException(
+            status_code=400,
+            detail=RUNTIME_CONFIG_MISSING_DETAIL,
+        )
     return AdminEnqueueResponse(accepted=True, taskType=TASK_TYPE_PAGE_RECONCILE, pageId=page_id)
 
 
@@ -297,16 +398,30 @@ async def ingest_notion_webhook(
     sync_service = SyncService(session_factory=SessionLocal, settings=settings)
 
     if page_ids:
+        queued_page_ids: list[str] = []
         for page_id in page_ids:
-            sync_service.enqueue_page_sync(page_id=page_id, source="webhook")
+            accepted = sync_service.enqueue_page_sync(page_id=page_id, source="webhook")
+            if accepted:
+                queued_page_ids.append(page_id)
+
+        if not queued_page_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=RUNTIME_CONFIG_MISSING_DETAIL,
+            )
         return WebhookIngestResponse(
             received=True,
-            queuedPageCount=len(page_ids),
-            queuedPageIds=page_ids,
+            queuedPageCount=len(queued_page_ids),
+            queuedPageIds=queued_page_ids,
             fallbackTaskType=None,
         )
 
-    sync_service.enqueue_full_sync(source="webhook_fallback")
+    accepted = sync_service.enqueue_full_sync(source="webhook_fallback")
+    if not accepted:
+        raise HTTPException(
+            status_code=400,
+            detail=RUNTIME_CONFIG_MISSING_DETAIL,
+        )
     return WebhookIngestResponse(
         received=True,
         queuedPageCount=0,

@@ -87,3 +87,19 @@ export interface AdminEnqueueResponse {
   taskType: string;
   pageId?: string | null;
 }
+
+export interface AdminConfigResponse {
+  notionRootPageId: string;
+  hasNotionToken: boolean;
+  notionUseFixtures: boolean;
+  notionFixturePath: string;
+  configuredViaDb: boolean;
+}
+
+export interface AdminConfigUpdateRequest {
+  notionToken?: string | null;
+  notionRootPageId?: string | null;
+  notionUseFixtures?: boolean | null;
+  notionFixturePath?: string | null;
+  clearNotionToken?: boolean;
+}

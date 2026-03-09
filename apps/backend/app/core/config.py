@@ -10,8 +10,8 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
 
-    notion_token: str = Field(..., alias="NOTION_TOKEN")
-    notion_root_page_id: str = Field(..., alias="NOTION_ROOT_PAGE_ID")
+    notion_token: str = Field(default="", alias="NOTION_TOKEN")
+    notion_root_page_id: str = Field(default="", alias="NOTION_ROOT_PAGE_ID")
     notion_use_fixtures: bool = Field(default=False, alias="NOTION_USE_FIXTURES")
     notion_fixture_path: str = Field(default="", alias="NOTION_FIXTURE_PATH")
 

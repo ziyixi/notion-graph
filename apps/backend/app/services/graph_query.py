@@ -22,8 +22,9 @@ from app.schemas.domain import GraphEdge, GraphNode
 
 
 class GraphQueryService:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, root_page_id: str | None = None) -> None:
         self.settings = settings
+        self.root_page_id = root_page_id or settings.notion_root_page_id
 
     def get_graph(
         self,
@@ -37,7 +38,7 @@ class GraphQueryService:
         if mode == "neighborhood":
             node_ids = self._neighborhood_ids(session, center_node_id, depth)
         else:
-            stmt = select(Node.id).where(Node.root_page_id == self.settings.notion_root_page_id)
+            stmt = select(Node.id).where(Node.root_page_id == self.root_page_id)
             if types:
                 stmt = stmt.where(Node.type.in_(types))
             stmt = stmt.limit(limit)
@@ -63,7 +64,7 @@ class GraphQueryService:
             nodes=nodes,
             edges=edges,
             meta=GraphMeta(
-                rootPageId=self.settings.notion_root_page_id,
+                rootPageId=self.root_page_id,
                 generatedAt=datetime.now(UTC),
                 mode=mode,
             ),
@@ -82,7 +83,7 @@ class GraphQueryService:
 
         stmt = (
             select(Node)
-            .where(Node.root_page_id == self.settings.notion_root_page_id)
+            .where(Node.root_page_id == self.root_page_id)
             .order_by(Node.title.asc())
         )
 
@@ -134,14 +135,14 @@ class GraphQueryService:
 
     def get_node_detail(self, session: Session, node_id: str) -> NodeDetailResponse | None:
         node = session.get(Node, node_id)
-        if not node or node.root_page_id != self.settings.notion_root_page_id:
+        if not node or node.root_page_id != self.root_page_id:
             return None
 
         ancestors = self._load_nodes(session, set(node.ancestor_ids))
 
         adjacent_edges = session.scalars(
             select(Edge)
-            .where(Edge.root_page_id == self.settings.notion_root_page_id)
+            .where(Edge.root_page_id == self.root_page_id)
             .where(or_(Edge.source_id == node_id, Edge.target_id == node_id))
         ).all()
 
@@ -175,7 +176,7 @@ class GraphQueryService:
         )
 
     def get_health(self, session: Session) -> tuple[str, datetime | None, str | None]:
-        checkpoint = session.get(SyncCheckpoint, self.settings.notion_root_page_id)
+        checkpoint = session.get(SyncCheckpoint, self.root_page_id)
         if not checkpoint:
             return "starting", None, None
         return checkpoint.status or "idle", checkpoint.last_full_sync_at, checkpoint.status
@@ -192,7 +193,7 @@ class GraphQueryService:
 
         rows = session.scalars(
             select(Edge)
-            .where(Edge.root_page_id == self.settings.notion_root_page_id)
+            .where(Edge.root_page_id == self.root_page_id)
             .where(Edge.source_id.in_(node_ids))
             .where(Edge.target_id.in_(node_ids))
         ).all()
@@ -240,7 +241,7 @@ class GraphQueryService:
             return set()
 
         edges = session.scalars(
-            select(Edge).where(Edge.root_page_id == self.settings.notion_root_page_id)
+            select(Edge).where(Edge.root_page_id == self.root_page_id)
         ).all()
 
         adjacency: dict[str, set[str]] = defaultdict(set)

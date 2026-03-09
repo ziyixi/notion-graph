@@ -1,4 +1,6 @@
 import {
+  AdminConfigResponse,
+  AdminConfigUpdateRequest,
   AdminEnqueueResponse,
   AdminSyncStatusResponse,
   GraphResponse,
@@ -45,6 +47,26 @@ export async function fetchNodeDetail(nodeId: string): Promise<NodeDetailRespons
 export async function fetchAdminSyncStatus(apiKey: string): Promise<AdminSyncStatusResponse> {
   return request<AdminSyncStatusResponse>("/api/admin/sync/status", {
     headers: adminHeaders(apiKey)
+  });
+}
+
+export async function fetchAdminConfig(apiKey: string): Promise<AdminConfigResponse> {
+  return request<AdminConfigResponse>("/api/admin/config", {
+    headers: adminHeaders(apiKey)
+  });
+}
+
+export async function updateAdminConfig(
+  apiKey: string,
+  payload: AdminConfigUpdateRequest
+): Promise<AdminConfigResponse> {
+  return request<AdminConfigResponse>("/api/admin/config", {
+    method: "PUT",
+    headers: {
+      ...adminHeaders(apiKey),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
   });
 }
 

@@ -104,3 +104,19 @@ class WebhookIngestResponse(BaseModel):
     queuedPageCount: int
     queuedPageIds: list[str]
     fallbackTaskType: str | None = None
+
+
+class AdminConfigResponse(BaseModel):
+    notionRootPageId: str
+    hasNotionToken: bool
+    notionUseFixtures: bool
+    notionFixturePath: str
+    configuredViaDb: bool
+
+
+class AdminConfigUpdateRequest(BaseModel):
+    notionToken: str | None = None
+    notionRootPageId: str | None = None
+    notionUseFixtures: bool | None = None
+    notionFixturePath: str | None = None
+    clearNotionToken: bool = False

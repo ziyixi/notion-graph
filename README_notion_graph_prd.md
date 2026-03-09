@@ -11,8 +11,9 @@ This document originally proposed a TypeScript/Fastify + queue/webhook-heavy arc
 1. Backend is **Python** (`FastAPI + SQLAlchemy + Alembic`) rather than Node/Fastify.
 2. Persistence is **SQLite** (Docker volume-backed) for v1, not Postgres.
 3. Sync freshness now includes **startup full sync + periodic reconciliation + webhook-triggered page reconcile**.
-4. Runtime now includes an **admin sync control plane** (protected by `ADMIN_API_KEY`) and an `/admin` dashboard.
-5. Deployment model is **two Docker images** (`backend`, `web`) orchestrated by `docker compose`.
+4. Runtime now includes an **admin control plane** (protected by `ADMIN_API_KEY`) and an `/admin` dashboard.
+5. Notion runtime settings (`token`, `root page`, fixture mode/path) can be persisted in DB via admin APIs, with env fallback.
+6. Deployment model is **two Docker images** (`backend`, `web`) orchestrated by `docker compose`.
 
 When this PRD conflicts with repository code, this alignment section and the “Updated v1” sections below take precedence.
 
@@ -490,10 +491,11 @@ Therefore:
 
 ### 14.3 Incremental Sync
 In the implemented v1:
-1. enqueue a full sync task on app startup
-2. execute a full root crawl and replace indexed nodes/edges deterministically
-3. run periodic reconciliation based on `SYNC_INTERVAL_MINUTES`
-4. retry failed sync tasks with backoff and mark failures in sync checkpoint state
+1. resolve runtime Notion config from DB-backed admin settings (env fallback)
+2. enqueue a full sync task on app startup when config is complete
+3. execute a full root crawl and replace indexed nodes/edges deterministically
+4. run periodic reconciliation based on `SYNC_INTERVAL_MINUTES`
+5. retry failed sync tasks with backoff and mark failures in sync checkpoint state
 
 ### 14.4 Scheduled Reconciliation
 Run a full subtree reconciliation on a schedule, for example every 6 to 24 hours.
@@ -519,7 +521,7 @@ Query params:
 - `types?`
 - `limit?`
 
-Note: v1 uses a single configured root from `NOTION_ROOT_PAGE_ID`; if `rootPageId` is sent it must match.
+Note: v1 uses a single configured runtime root (`/api/admin/config` persisted value, with env fallback); if `rootPageId` is sent it must match.
 
 Response:
 ```json
@@ -585,6 +587,20 @@ Basic health check.
 
 ### Admin / Control Plane APIs
 
+#### `GET /api/admin/config`
+Returns current effective runtime config summary:
+- `notionRootPageId`
+- `hasNotionToken`
+- `notionUseFixtures`
+- `notionFixturePath`
+- `configuredViaDb`
+
+#### `PUT /api/admin/config`
+Persists runtime config overrides in DB (`app_config`) for:
+- Notion token
+- root page id
+- fixture mode/path
+
 #### `GET /api/admin/sync/status`
 Returns checkpoint summary, queue counts, and latest tasks.
 
@@ -606,6 +622,7 @@ Accepts Notion webhook events, verifies signature (if `NOTION_WEBHOOK_SECRET` is
 ### Sync Controls
 
 Sync behavior is runtime-driven:
+- runtime config persisted via `GET/PUT /api/admin/config` (env fallback if unset)
 - startup full sync
 - periodic reconciliation (`SYNC_INTERVAL_MINUTES`)
 - webhook-driven page reconcile (`POST /api/webhooks/notion`) with full-sync fallback
@@ -853,4 +870,5 @@ This snapshot maps key PRD requirements to the current codebase and indicates cu
 | Sync model | Startup full sync + periodic reconcile + idempotent replacement | Implemented |
 | CI/CD chain | Unit tests -> integration tests -> web build -> image release | Implemented in one GitHub Actions workflow graph |
 | Admin/dashboard/webhook writes | Admin sync control plane and webhook ingest | Implemented: admin APIs + `/admin` dashboard + webhook-driven page reconcile with full-sync fallback |
+| Runtime config management | Stateful admin-managed root/token with env fallback | Implemented: `/api/admin/config` + persisted `app_config` + sync scheduler reads effective runtime config dynamically |
 | Advanced observability stack | Metrics/Sentry dashboards | Implemented baseline: Prometheus-style metrics endpoint + admin metrics view + optional Sentry DSN integration |

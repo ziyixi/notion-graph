@@ -91,8 +91,21 @@ def upgrade() -> None:
     )
     op.create_index(op.f("ix_sync_tasks_status"), "sync_tasks", ["status"], unique=False)
 
+    op.create_table(
+        "app_config",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("notion_token", sa.Text(), nullable=True),
+        sa.Column("notion_root_page_id", sa.String(length=64), nullable=True),
+        sa.Column("notion_use_fixtures", sa.Boolean(), nullable=True),
+        sa.Column("notion_fixture_path", sa.String(length=2048), nullable=True),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.PrimaryKeyConstraint("id"),
+    )
+
 
 def downgrade() -> None:
+    op.drop_table("app_config")
+
     op.drop_index(op.f("ix_sync_tasks_status"), table_name="sync_tasks")
     op.drop_table("sync_tasks")
 

@@ -93,3 +93,19 @@ class SyncTask(Base):
         onupdate=lambda: datetime.now(UTC),
         nullable=False,
     )
+
+
+class AppConfig(Base):
+    __tablename__ = "app_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    notion_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notion_root_page_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    notion_use_fixtures: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    notion_fixture_path: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )

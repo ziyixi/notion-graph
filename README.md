@@ -5,13 +5,13 @@ Two-service app:
 - `backend`: Python `FastAPI` + `SQLAlchemy` + `Alembic` + `SQLite`
 - `web`: Next.js representative graph UI using Sigma.js
 
-The backend reads `NOTION_ROOT_PAGE_ID` from env, performs startup full sync, then runs periodic reconcile, and also supports webhook-triggered incremental page reconcile.
+The backend resolves runtime Notion config from env and/or persisted admin settings, performs startup full sync when config is complete, then runs periodic reconcile, and also supports webhook-triggered incremental page reconcile.
 
 Representative UI includes:
 - collapsible search panel with grouped results and keyboard navigation
 - graph filters for node type, selected-node depth, minimum degree, isolated-node hiding, and structured relation labels
 - node detail panel with relation breakdown and open-in-Notion action
-- `/admin` control plane for sync operations and metrics
+- `/admin` control plane for runtime config, sync operations, and metrics
 
 ## Architecture
 
@@ -27,9 +27,11 @@ flowchart LR
       sch[Sync Scheduler<br/>startup + periodic]
       db[(SQLite /data/notion_graph.db)]
       api[Read APIs<br/>/api/graph, /api/nodes/*]
+      admin[Admin APIs<br/>/api/admin/config + sync]
       c --> db
       sch --> c
       db --> api
+      db --> admin
     end
 
     subgraph Web["Web Container (Next.js + Sigma)"]
@@ -38,6 +40,7 @@ flowchart LR
 
     n -->|Notion API| c
     api -->|JSON| ui
+    ui -->|Admin key + settings| admin
     u --> ui
     ui -->|Open in Notion| n
 
@@ -46,7 +49,7 @@ flowchart LR
     classDef fe fill:#f0fdf4,stroke:#16a34a,color:#14532d;
 
     class n,u ext;
-    class c,sch,db,api be;
+    class c,sch,db,api,admin be;
     class ui fe;
 ```
 
@@ -60,6 +63,9 @@ make env-init
 
 2. Fill at least:
 
+- `ADMIN_API_KEY` (to access `/admin`)
+
+Optional (env fallback instead of admin-stored runtime config):
 - `NOTION_TOKEN`
 - `NOTION_ROOT_PAGE_ID`
 
@@ -75,14 +81,23 @@ make real
 - Admin: `http://localhost:3000/admin`
 - API health: `http://localhost:8000/api/health`
 
+5. If `NOTION_TOKEN` / `NOTION_ROOT_PAGE_ID` are not set in env, configure them in `/admin` and save. Scheduler will enqueue a full reconcile automatically once runtime config is complete.
+
 Required env for backend:
-- `NOTION_TOKEN`
-- `NOTION_ROOT_PAGE_ID`
 - `ADMIN_API_KEY` (for admin endpoints and `/admin` dashboard)
+- `NOTION_TOKEN` / `NOTION_ROOT_PAGE_ID` are optional if configured in `/admin`
 
 Optional env:
 - `NOTION_WEBHOOK_SECRET` (enables webhook signature verification)
 - `SENTRY_DSN`, `SENTRY_ENVIRONMENT`, `SENTRY_TRACES_SAMPLE_RATE`
+
+## Runtime Config Source
+
+Notion runtime config is resolved in this order:
+- persisted admin config in SQLite (`app_config` table)
+- env fallback (`NOTION_*`)
+
+This makes admin-entered settings stateful across restarts (via `graph_data` Docker volume).
 
 ## Make Commands
 
@@ -134,6 +149,8 @@ SQLite data is stored in named Docker volume `graph_data` mounted at `/data` in 
 
 ## API (Admin / Webhook)
 
+- `GET /api/admin/config` (requires `X-Admin-Api-Key`)
+- `PUT /api/admin/config` (requires `X-Admin-Api-Key`)
 - `GET /api/admin/sync/status` (requires `X-Admin-Api-Key`)
 - `GET /api/admin/sync/tasks` (requires `X-Admin-Api-Key`)
 - `POST /api/admin/sync/full` (requires `X-Admin-Api-Key`)

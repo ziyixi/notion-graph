@@ -13,6 +13,7 @@ from app.db.models import Edge, Node, SyncCheckpoint, SyncTask
 from app.notion.client import FixtureNotionClient, RealNotionClient
 from app.notion.crawler import NotionCrawler
 from app.schemas.domain import GraphEdge, GraphNode
+from app.services.runtime_config import EffectiveRuntimeConfig, RuntimeConfigService
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +25,21 @@ class SyncService:
     def __init__(self, session_factory: sessionmaker[Session], settings: Settings) -> None:
         self.session_factory = session_factory
         self.settings = settings
+        self.runtime_config_service = RuntimeConfigService()
 
-    def enqueue_full_sync(self, run_at: datetime | None = None, source: str = "system") -> None:
+    def enqueue_full_sync(
+        self,
+        run_at: datetime | None = None,
+        source: str = "system",
+    ) -> bool:
         now = datetime.now(UTC)
         run_at = run_at or now
 
         with self.session_factory() as session:
+            config = self.runtime_config_service.get_effective_config(session, self.settings)
+            if not config.has_minimum_sync_config:
+                return False
+
             pending_task = session.scalar(
                 select(SyncTask)
                 .where(SyncTask.task_type == TASK_TYPE_FULL_RECONCILE)
@@ -37,7 +47,7 @@ class SyncService:
                 .limit(1)
             )
             if pending_task:
-                return
+                return True
 
             session.add(
                 SyncTask(
@@ -45,21 +55,26 @@ class SyncService:
                     status="queued",
                     run_at=run_at,
                     max_attempts=3,
-                    payload={"source": source},
+                    payload={"source": source, "root_page_id": config.notion_root_page_id},
                 )
             )
             session.commit()
+            return True
 
     def enqueue_page_sync(
         self,
         page_id: str,
         run_at: datetime | None = None,
         source: str = "webhook",
-    ) -> None:
+    ) -> bool:
         now = datetime.now(UTC)
         run_at = run_at or now
 
         with self.session_factory() as session:
+            config = self.runtime_config_service.get_effective_config(session, self.settings)
+            if not config.has_minimum_sync_config:
+                return False
+
             pending_tasks = session.scalars(
                 select(SyncTask)
                 .where(SyncTask.task_type == TASK_TYPE_PAGE_RECONCILE)
@@ -70,7 +85,7 @@ class SyncService:
             for task in pending_tasks:
                 payload = task.payload or {}
                 if payload.get("page_id") == page_id:
-                    return
+                    return True
 
             session.add(
                 SyncTask(
@@ -78,16 +93,25 @@ class SyncService:
                     status="queued",
                     run_at=run_at,
                     max_attempts=3,
-                    payload={"page_id": page_id, "source": source},
+                    payload={
+                        "page_id": page_id,
+                        "source": source,
+                        "root_page_id": config.notion_root_page_id,
+                    },
                 )
             )
             session.commit()
+            return True
 
     def ensure_periodic_task(self) -> None:
         now = datetime.now(UTC)
         threshold = now - timedelta(minutes=self.settings.sync_interval_minutes)
 
         with self.session_factory() as session:
+            config = self.runtime_config_service.get_effective_config(session, self.settings)
+            if not config.has_minimum_sync_config:
+                return
+
             pending_task = session.scalar(
                 select(SyncTask)
                 .where(SyncTask.task_type == TASK_TYPE_FULL_RECONCILE)
@@ -97,7 +121,7 @@ class SyncService:
             if pending_task:
                 return
 
-            checkpoint = session.get(SyncCheckpoint, self.settings.notion_root_page_id)
+            checkpoint = session.get(SyncCheckpoint, config.notion_root_page_id)
             last_full_sync_at = checkpoint.last_full_sync_at if checkpoint else None
             if last_full_sync_at and last_full_sync_at.tzinfo is None:
                 last_full_sync_at = last_full_sync_at.replace(tzinfo=UTC)
@@ -108,7 +132,7 @@ class SyncService:
                         status="queued",
                         run_at=now,
                         max_attempts=3,
-                        payload={"source": "periodic"},
+                        payload={"source": "periodic", "root_page_id": config.notion_root_page_id},
                     )
                 )
                 session.commit()
@@ -134,19 +158,31 @@ class SyncService:
             task_id = task.id
             task_type = task.task_type
             task_payload = dict(task.payload or {})
+            payload_root_page_id = str(task_payload.get("root_page_id", "")).strip()
 
         started = perf_counter()
+        runtime_config: EffectiveRuntimeConfig | None = None
         try:
+            with self.session_factory() as session:
+                runtime_config = self.runtime_config_service.get_effective_config(
+                    session, self.settings
+                )
+            if not runtime_config.has_minimum_sync_config:
+                raise ValueError("Notion runtime configuration is incomplete")
+
             if task_type == TASK_TYPE_FULL_RECONCILE:
-                node_count, edge_count = self._run_full_sync_task()
+                node_count, edge_count = self._run_full_sync_task(runtime_config)
             elif task_type == TASK_TYPE_PAGE_RECONCILE:
                 page_id = str(task_payload.get("page_id", "")).strip()
-                node_count, edge_count = self._run_page_sync_task(page_id)
+                node_count, edge_count = self._run_page_sync_task(page_id, runtime_config)
             else:
                 raise ValueError(f"Unsupported sync task type: {task_type}")
         except Exception as exc:
             logger.exception("Sync task failed")
-            self._mark_task_failed(task_id, str(exc))
+            root_page_id_for_checkpoint = payload_root_page_id
+            if not root_page_id_for_checkpoint and runtime_config:
+                root_page_id_for_checkpoint = runtime_config.notion_root_page_id
+            self._mark_task_failed(task_id, str(exc), root_page_id_for_checkpoint)
             metrics_registry.inc_counter(
                 "notion_graph_sync_runs_total",
                 labels={"task_type": task_type, "status": "failed"},
@@ -181,12 +217,18 @@ class SyncService:
         return True
 
     def run_startup_sync(self) -> None:
-        self.enqueue_full_sync(source="startup")
+        accepted = self.enqueue_full_sync(source="startup")
+        if not accepted:
+            logger.info("Skipping startup sync because runtime config is incomplete")
+            return
         self.process_next_task()
 
     def get_checkpoint(self) -> SyncCheckpoint | None:
         with self.session_factory() as session:
-            return session.get(SyncCheckpoint, self.settings.notion_root_page_id)
+            config = self.runtime_config_service.get_effective_config(session, self.settings)
+            if not config.notion_root_page_id:
+                return None
+            return session.get(SyncCheckpoint, config.notion_root_page_id)
 
     def list_recent_tasks(self, limit: int = 20) -> list[SyncTask]:
         with self.session_factory() as session:
@@ -208,7 +250,7 @@ class SyncService:
             task.last_error = None
             session.commit()
 
-    def _mark_task_failed(self, task_id: int, error: str) -> None:
+    def _mark_task_failed(self, task_id: int, error: str, root_page_id: str | None) -> None:
         now = datetime.now(UTC)
         retry_delay = timedelta(seconds=30)
 
@@ -227,14 +269,18 @@ class SyncService:
                 task.finished_at = now
                 task.last_error = error
 
-            checkpoint = session.get(SyncCheckpoint, self.settings.notion_root_page_id)
+            if not root_page_id:
+                session.commit()
+                return
+
+            checkpoint = session.get(SyncCheckpoint, root_page_id)
             if checkpoint:
                 checkpoint.status = "failed"
                 checkpoint.last_error = error
             else:
                 session.add(
                     SyncCheckpoint(
-                        root_page_id=self.settings.notion_root_page_id,
+                        root_page_id=root_page_id,
                         status="failed",
                         last_error=error,
                     )
@@ -242,18 +288,23 @@ class SyncService:
 
             session.commit()
 
-    def _run_full_sync_task(self) -> tuple[int, int]:
+    def _run_full_sync_task(self, config: EffectiveRuntimeConfig) -> tuple[int, int]:
         checkpoint_time = datetime.now(UTC)
-        notion_client = self._build_notion_client()
-        crawler = NotionCrawler(notion_client, self.settings.notion_root_page_id)
+        notion_client = self._build_notion_client(config)
+        crawler = NotionCrawler(notion_client, config.notion_root_page_id)
         crawl_result = crawler.crawl()
 
         with self.session_factory() as session:
-            self._replace_graph(session, crawl_result.nodes, crawl_result.edges)
+            self._replace_graph(
+                session,
+                root_page_id=config.notion_root_page_id,
+                nodes=crawl_result.nodes,
+                edges=crawl_result.edges,
+            )
 
-            checkpoint = session.get(SyncCheckpoint, self.settings.notion_root_page_id)
+            checkpoint = session.get(SyncCheckpoint, config.notion_root_page_id)
             if not checkpoint:
-                checkpoint = SyncCheckpoint(root_page_id=self.settings.notion_root_page_id)
+                checkpoint = SyncCheckpoint(root_page_id=config.notion_root_page_id)
                 session.add(checkpoint)
 
             checkpoint.last_full_sync_at = checkpoint_time
@@ -265,26 +316,30 @@ class SyncService:
             session.commit()
             return (len(crawl_result.nodes), len(crawl_result.edges))
 
-    def _run_page_sync_task(self, page_id: str) -> tuple[int, int]:
+    def _run_page_sync_task(
+        self,
+        page_id: str,
+        config: EffectiveRuntimeConfig,
+    ) -> tuple[int, int]:
         if not page_id:
-            return self._run_full_sync_task()
+            return self._run_full_sync_task(config)
 
         with self.session_factory() as session:
             existing_node = session.get(Node, page_id)
-            if not existing_node or existing_node.root_page_id != self.settings.notion_root_page_id:
+            if not existing_node or existing_node.root_page_id != config.notion_root_page_id:
                 logger.info(
                     "Page %s not found in local index, falling back to full reconcile",
                     page_id,
                 )
-                return self._run_full_sync_task()
+                return self._run_full_sync_task(config)
 
             parent_id = existing_node.parent_id
             ancestor_ids = list(existing_node.ancestor_ids or [])
             ancestor_titles = list(existing_node.ancestor_titles or [])
             depth = existing_node.depth
 
-        notion_client = self._build_notion_client()
-        crawler = NotionCrawler(notion_client, self.settings.notion_root_page_id)
+        notion_client = self._build_notion_client(config)
+        crawler = NotionCrawler(notion_client, config.notion_root_page_id)
         crawl_result = crawler.crawl_from_page(
             start_page_id=page_id,
             parent_id=parent_id,
@@ -297,63 +352,63 @@ class SyncService:
         with self.session_factory() as session:
             node_count, edge_count = self._replace_subgraph(
                 session=session,
+                root_page_id=config.notion_root_page_id,
                 start_page_id=page_id,
                 nodes=crawl_result.nodes,
                 edges=crawl_result.edges,
             )
 
-            checkpoint = session.get(SyncCheckpoint, self.settings.notion_root_page_id)
+            checkpoint = session.get(SyncCheckpoint, config.notion_root_page_id)
             if not checkpoint:
-                checkpoint = SyncCheckpoint(root_page_id=self.settings.notion_root_page_id)
+                checkpoint = SyncCheckpoint(root_page_id=config.notion_root_page_id)
                 session.add(checkpoint)
 
             checkpoint.status = "idle"
             checkpoint.last_error = None
             checkpoint.node_count = session.scalar(
-                select(func.count(Node.id)).where(
-                    Node.root_page_id == self.settings.notion_root_page_id
-                )
+                select(func.count(Node.id)).where(Node.root_page_id == config.notion_root_page_id)
             ) or 0
             checkpoint.edge_count = session.scalar(
-                select(func.count(Edge.id)).where(
-                    Edge.root_page_id == self.settings.notion_root_page_id
-                )
+                select(func.count(Edge.id)).where(Edge.root_page_id == config.notion_root_page_id)
             ) or 0
 
             session.commit()
             return (node_count, edge_count)
 
-    def _build_notion_client(self) -> RealNotionClient | FixtureNotionClient:
-        if self.settings.notion_use_fixtures:
-            if not self.settings.notion_fixture_path:
+    def _build_notion_client(
+        self,
+        config: EffectiveRuntimeConfig,
+    ) -> RealNotionClient | FixtureNotionClient:
+        if config.notion_use_fixtures:
+            if not config.notion_fixture_path:
                 raise ValueError("NOTION_FIXTURE_PATH must be set when NOTION_USE_FIXTURES=true")
-            return FixtureNotionClient(self.settings.notion_fixture_path)
+            return FixtureNotionClient(config.notion_fixture_path)
 
-        return RealNotionClient(self.settings.notion_token)
+        return RealNotionClient(config.notion_token)
 
     def _replace_graph(
         self,
         session: Session,
+        root_page_id: str,
         nodes: list[GraphNode],
         edges: list[GraphEdge],
     ) -> None:
-        root_page_id = self.settings.notion_root_page_id
         now = datetime.now(UTC)
 
         session.execute(delete(Edge).where(Edge.root_page_id == root_page_id))
         session.execute(delete(Node).where(Node.root_page_id == root_page_id))
 
-        self._insert_nodes(session, nodes=nodes, synced_at=now)
-        self._insert_edges(session, edges=edges, synced_at=now)
+        self._insert_nodes(session, root_page_id=root_page_id, nodes=nodes, synced_at=now)
+        self._insert_edges(session, root_page_id=root_page_id, edges=edges, synced_at=now)
 
     def _replace_subgraph(
         self,
         session: Session,
+        root_page_id: str,
         start_page_id: str,
         nodes: list[GraphNode],
         edges: list[GraphEdge],
     ) -> tuple[int, int]:
-        root_page_id = self.settings.notion_root_page_id
         now = datetime.now(UTC)
 
         existing_nodes = session.scalars(
@@ -387,7 +442,7 @@ class SyncService:
                 .where(Node.id.in_(old_subtree_ids))
             )
 
-        self._insert_nodes(session, nodes=nodes, synced_at=now)
+        self._insert_nodes(session, root_page_id=root_page_id, nodes=nodes, synced_at=now)
 
         existing_outside_ids = {
             node.id
@@ -403,12 +458,22 @@ class SyncService:
             and edge.targetId in valid_target_ids
             and edge.sourceId != edge.targetId
         ]
-        self._insert_edges(session, edges=filtered_edges, synced_at=now)
+        self._insert_edges(
+            session,
+            root_page_id=root_page_id,
+            edges=filtered_edges,
+            synced_at=now,
+        )
 
         return (len(nodes), len(filtered_edges))
 
-    def _insert_nodes(self, session: Session, nodes: list[GraphNode], synced_at: datetime) -> None:
-        root_page_id = self.settings.notion_root_page_id
+    def _insert_nodes(
+        self,
+        session: Session,
+        root_page_id: str,
+        nodes: list[GraphNode],
+        synced_at: datetime,
+    ) -> None:
         for node in nodes:
             session.add(
                 Node(
@@ -432,8 +497,13 @@ class SyncService:
                 )
             )
 
-    def _insert_edges(self, session: Session, edges: list[GraphEdge], synced_at: datetime) -> None:
-        root_page_id = self.settings.notion_root_page_id
+    def _insert_edges(
+        self,
+        session: Session,
+        root_page_id: str,
+        edges: list[GraphEdge],
+        synced_at: datetime,
+    ) -> None:
         for edge in edges:
             session.add(
                 Edge(

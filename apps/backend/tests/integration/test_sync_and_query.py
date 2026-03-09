@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db.base import Base
 from app.db.models import Edge, Node, SyncCheckpoint, SyncTask
 from app.services.graph_query import GraphQueryService
+from app.services.runtime_config import RuntimeConfigService
 from app.services.sync import TASK_TYPE_PAGE_RECONCILE, SyncService
 
 
@@ -166,3 +167,42 @@ def test_page_reconcile_task_runs(tmp_path: Path) -> None:
     assert task is not None
     assert task.status in {"succeeded", "queued", "running"}
     assert alice is not None
+
+
+def test_sync_can_start_after_runtime_config_saved_in_db(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    settings.notion_root_page_id = ""
+    settings.notion_token = ""
+    settings.notion_use_fixtures = False
+    session_factory = _session_factory(settings.database_url)
+    sync_service = SyncService(session_factory=session_factory, settings=settings)
+
+    # No env/runtime config yet, startup sync should be skipped.
+    sync_service.run_startup_sync()
+    with session_factory() as session:
+        assert session.scalar(select(func.count(Node.id))) == 0
+
+    # Simulate admin saving config into DB (fixture mode, root id).
+    runtime_config = RuntimeConfigService()
+    with session_factory() as session:
+        runtime_config.update_admin_config(
+            session,
+            notion_token=None,
+            notion_root_page_id="root_page",
+            notion_use_fixtures=True,
+            notion_fixture_path=settings.notion_fixture_path,
+            clear_notion_token=False,
+        )
+
+    # Periodic loop should now enqueue and process full reconcile successfully.
+    sync_service.ensure_periodic_task()
+    sync_service.process_next_task()
+
+    with session_factory() as session:
+        node_count = session.scalar(select(func.count(Node.id)))
+        edge_count = session.scalar(select(func.count(Edge.id)))
+        checkpoint = session.get(SyncCheckpoint, "root_page")
+
+    assert node_count is not None and node_count > 0
+    assert edge_count is not None and edge_count > 0
+    assert checkpoint is not None

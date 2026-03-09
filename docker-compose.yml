@@ -5,8 +5,8 @@ services:
       dockerfile: Dockerfile
     container_name: notion-graph-backend
     environment:
-      NOTION_TOKEN: ${NOTION_TOKEN}
-      NOTION_ROOT_PAGE_ID: ${NOTION_ROOT_PAGE_ID}
+      NOTION_TOKEN: ${NOTION_TOKEN:-}
+      NOTION_ROOT_PAGE_ID: ${NOTION_ROOT_PAGE_ID:-}
       NOTION_USE_FIXTURES: ${NOTION_USE_FIXTURES:-false}
       NOTION_FIXTURE_PATH: ${NOTION_FIXTURE_PATH:-/app/tests/fixtures/notion_fixture.json}
       DATABASE_URL: ${DATABASE_URL:-sqlite:////data/notion_graph.db}
