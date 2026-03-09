@@ -1,0 +1,48 @@
+services:
+  backend:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile
+    container_name: notion-graph-backend
+    environment:
+      NOTION_TOKEN: ${NOTION_TOKEN}
+      NOTION_ROOT_PAGE_ID: ${NOTION_ROOT_PAGE_ID}
+      NOTION_USE_FIXTURES: ${NOTION_USE_FIXTURES:-false}
+      NOTION_FIXTURE_PATH: ${NOTION_FIXTURE_PATH:-/app/tests/fixtures/notion_fixture.json}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/notion_graph.db}
+      SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-360}
+      SYNC_POLL_SECONDS: ${SYNC_POLL_SECONDS:-10}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      NOTION_WEBHOOK_SECRET: ${NOTION_WEBHOOK_SECRET:-}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-development}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.0}
+    ports:
+      - "8000:8000"
+    volumes:
+      - graph_data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    container_name: notion-graph-web
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+
+volumes:
+  graph_data:

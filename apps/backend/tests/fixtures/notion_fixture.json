@@ -1,0 +1,322 @@
+{
+  "pages": {
+    "root_page": {
+      "id": "root_page",
+      "url": "https://www.notion.so/root_page",
+      "last_edited_time": "2026-03-08T10:00:00.000Z",
+      "in_trash": false,
+      "properties": {
+        "title": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "plain_text": "Graph Root"
+            }
+          ]
+        }
+      }
+    },
+    "people_page": {
+      "id": "people_page",
+      "url": "https://www.notion.so/people_page",
+      "last_edited_time": "2026-03-08T10:01:00.000Z",
+      "in_trash": false,
+      "properties": {
+        "title": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "plain_text": "People"
+            }
+          ]
+        }
+      }
+    },
+    "projects_page": {
+      "id": "projects_page",
+      "url": "https://www.notion.so/projects_page",
+      "last_edited_time": "2026-03-08T10:01:00.000Z",
+      "in_trash": false,
+      "properties": {
+        "title": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "plain_text": "Projects"
+            }
+          ]
+        }
+      }
+    },
+    "artifacts_page": {
+      "id": "artifacts_page",
+      "url": "https://www.notion.so/artifacts_page",
+      "last_edited_time": "2026-03-08T10:01:00.000Z",
+      "in_trash": false,
+      "properties": {
+        "title": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "plain_text": "Artifacts"
+            }
+          ]
+        }
+      }
+    },
+    "alice_page": {
+      "id": "alice_page",
+      "url": "https://www.notion.so/alice_page",
+      "last_edited_time": "2026-03-08T10:02:00.000Z",
+      "in_trash": false,
+      "icon": {
+        "type": "emoji",
+        "emoji": "🧠"
+      },
+      "properties": {
+        "title": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "plain_text": "Alice"
+            }
+          ]
+        }
+      }
+    },
+    "bob_page": {
+      "id": "bob_page",
+      "url": "https://www.notion.so/bob_page",
+      "last_edited_time": "2026-03-08T10:02:00.000Z",
+      "in_trash": false,
+      "properties": {
+        "title": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "plain_text": "Bob"
+            }
+          ]
+        }
+      }
+    },
+    "project_atlas_page": {
+      "id": "project_atlas_page",
+      "url": "https://www.notion.so/project_atlas_page",
+      "last_edited_time": "2026-03-08T10:02:00.000Z",
+      "in_trash": false,
+      "properties": {
+        "title": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "plain_text": "Project Atlas"
+            }
+          ]
+        }
+      }
+    },
+    "paper_a_page": {
+      "id": "paper_a_page",
+      "url": "https://www.notion.so/paper_a_page",
+      "last_edited_time": "2026-03-08T10:03:00.000Z",
+      "in_trash": false,
+      "properties": {
+        "title": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "plain_text": "Paper A"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "block_children": {
+    "root_page": [
+      {
+        "id": "people_page",
+        "type": "child_page",
+        "has_children": true,
+        "child_page": {
+          "title": "People"
+        }
+      },
+      {
+        "id": "projects_page",
+        "type": "child_page",
+        "has_children": true,
+        "child_page": {
+          "title": "Projects"
+        }
+      },
+      {
+        "id": "artifacts_page",
+        "type": "child_page",
+        "has_children": true,
+        "child_page": {
+          "title": "Artifacts"
+        }
+      }
+    ],
+    "people_page": [
+      {
+        "id": "alice_page",
+        "type": "child_page",
+        "has_children": true,
+        "child_page": {
+          "title": "Alice"
+        }
+      },
+      {
+        "id": "bob_page",
+        "type": "child_page",
+        "has_children": true,
+        "child_page": {
+          "title": "Bob"
+        }
+      }
+    ],
+    "projects_page": [
+      {
+        "id": "project_atlas_page",
+        "type": "child_page",
+        "has_children": true,
+        "child_page": {
+          "title": "Project Atlas"
+        }
+      }
+    ],
+    "artifacts_page": [
+      {
+        "id": "paper_a_page",
+        "type": "child_page",
+        "has_children": true,
+        "child_page": {
+          "title": "Paper A"
+        }
+      }
+    ],
+    "alice_page": [
+      {
+        "id": "alice_relation_block",
+        "type": "paragraph",
+        "has_children": false,
+        "paragraph": {
+          "rich_text": [
+            {
+              "type": "text",
+              "plain_text": "works_with -> "
+            },
+            {
+              "type": "mention",
+              "plain_text": "@Bob",
+              "mention": {
+                "type": "page",
+                "page": {
+                  "id": "bob_page"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "alice_link_block",
+        "type": "link_to_page",
+        "has_children": false,
+        "link_to_page": {
+          "type": "page_id",
+          "page_id": "paper_a_page"
+        }
+      },
+      {
+        "id": "alice_type_block",
+        "type": "paragraph",
+        "has_children": false,
+        "paragraph": {
+          "rich_text": [
+            {
+              "type": "text",
+              "plain_text": "Type: Person"
+            }
+          ]
+        }
+      }
+    ],
+    "bob_page": [
+      {
+        "id": "bob_mention_block",
+        "type": "paragraph",
+        "has_children": false,
+        "paragraph": {
+          "rich_text": [
+            {
+              "type": "text",
+              "plain_text": "Related to "
+            },
+            {
+              "type": "mention",
+              "plain_text": "@Alice",
+              "mention": {
+                "type": "page",
+                "page": {
+                  "id": "alice_page"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "project_atlas_page": [
+      {
+        "id": "project_about_block",
+        "type": "paragraph",
+        "has_children": false,
+        "paragraph": {
+          "rich_text": [
+            {
+              "type": "text",
+              "plain_text": "about -> "
+            },
+            {
+              "type": "mention",
+              "plain_text": "@Alice",
+              "mention": {
+                "type": "page",
+                "page": {
+                  "id": "alice_page"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "paper_a_page": [
+      {
+        "id": "paper_type_block",
+        "type": "paragraph",
+        "has_children": false,
+        "paragraph": {
+          "rich_text": [
+            {
+              "type": "text",
+              "plain_text": "Type: Artifact"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

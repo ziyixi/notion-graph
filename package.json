@@ -1,0 +1,9 @@
+{
+  "name": "notion-graph",
+  "private": true,
+  "packageManager": "pnpm@9.12.3",
+  "scripts": {
+    "dev:web": "pnpm --dir apps/web dev",
+    "build:web": "pnpm --dir apps/web build"
+  }
+}
